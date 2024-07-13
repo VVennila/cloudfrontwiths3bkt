@@ -1,0 +1,77 @@
+provider "aws" {
+  region = "us-west-2" # Update to your desired region
+}
+
+locals {
+  origin_id = "s3origin"
+}
+
+resource "aws_s3_bucket" "static_web" {
+  bucket        = "ven-staticwebsite-files"
+  force_destroy = true
+}
+
+data "aws_iam_policy_document" "allow_access_from_another_account" {
+  statement {
+    principals {
+      type        = "AWS"
+      identifiers = ["123456789012"] # Replace with the correct AWS account ID
+    }
+
+    actions = [
+      "s3:GetObject",
+      "s3:ListBucket",
+    ]
+
+    resources = [
+      aws_s3_bucket.static_web.arn,
+      "${aws_s3_bucket.static_web.arn}/*",
+    ]
+  }
+}
+
+resource "aws_s3_bucket_policy" "allow_access_from_cloudfront" {
+  bucket = aws_s3_bucket.static_web.id
+  policy = data.aws_iam_policy_document.allow_access_from_another_account.json
+}
+
+data "aws_cloudfront_cache_policy" "example" {
+  id = "658327ea-f89d-4fab-a63d-02906eaa6e61" # Replace with the correct cache policy ID
+}
+
+data "aws_acm_certificate" "name" {
+  domain   = "example.com" # Replace with your domain
+  statuses = ["ISSUED"]
+}
+
+resource "aws_cloudfront_origin_access_control" "oac" {
+  name        = "example-oac"
+  origin_type = "s3"
+}
+
+resource "aws_cloudfront_distribution" "s3_distribution" {
+  origin {
+    domain_name              = aws_s3_bucket.static_web.bucket_regional_domain_name
+    origin_access_control_id = aws_cloudfront_origin_access_control.oac.id
+    origin_id                = local.origin_id
+  }
+
+  enabled             = true
+  comment             = "vennila's static website using Cloudfront"
+  default_root_object = "index.html"
+
+  aliases = ["mysite.example.com", "yoursite.example.com"] # Update to your actual aliases
+
+  default_cache_behavior {
+    cache_policy_id        = data.aws_cloudfront_cache_policy.example.id
+    allowed_methods        = ["GET", "HEAD"]
+    cached_methods         = ["GET", "HEAD"]
+    target_origin_id       = local.origin_id
+    viewer_protocol_policy = "redirect-to-https"
+  }
+
+  viewer_certificate {
+    acm_certificate_arn = data.aws_acm_certificate.name.arn
+    ssl_support_method  = "sni-only"
+  }
+}
